@@ -22,11 +22,15 @@ switch (command) {
   case "ls-tree":
     lsTree();
     break;
+  case "write-tree":
+    process.stdout.write(writeTree());
+    break;
   default:
     throw new Error(`Unknown command ${command}`);
 }
 
 function createGitDirectory() {
+  // init
   fs.mkdirSync(path.join(__dirname, ".git"), { recursive: true });
   fs.mkdirSync(path.join(__dirname, ".git", "objects"), { recursive: true });
   fs.mkdirSync(path.join(__dirname, ".git", "refs"), { recursive: true });
@@ -39,6 +43,7 @@ function createGitDirectory() {
 }
 
 function catFile() {
+  // cat-file -p <hash>
   const type = process.argv[3];
   const hash = process.argv[4];
   if (!type || !hash) {
@@ -57,6 +62,7 @@ function catFile() {
 }
 
 function hashObject() {
+  // hash-object -w <file>
   const flag = process.argv[3];
   const file = process.argv[4];
   if (!flag || !file) {
@@ -82,6 +88,7 @@ function hashFile(file) {
 }
 
 function lsTree() {
+  // ls-tree [--name-only] <hash>
   const isNameOnly = process.argv[3] === "--name-only";
   const hash = process.argv[isNameOnly ? 4 : 3];
   if (!hash) {
@@ -92,13 +99,91 @@ function lsTree() {
   const objectPath = path.join(__dirname, ".git", "objects", dirName, fileName);
   const dataFromFile = fs.readFileSync(objectPath);
   const decompressed = zlib.inflateSync(dataFromFile);
-  const contentStart = decompressed.indexOf("\x00") + 1;
-  const dataFromTree = decompressed.toString("utf-8", contentStart);
-  const names = dataFromTree.split("\n").map((line) => {
-    const [mode, type, hash, name] = line.split(" ");
-    return isNameOnly ? name : `${mode} ${type} ${hash} ${name}`;
+  const contents = decompressed.subarray(decompressed.indexOf("\0") + 1);
+
+  process.stdout.write(
+    parseContents(contents, [])
+      .map(({ mode, name }) => {
+        return isNameOnly ? name : `${mode} ${name}`;
+      })
+      .join("\n")
+      .concat("\n")
+  );
+}
+
+function writeTree(dir = __dirname) {
+  // write-tree
+  const tree = parseTree(dir);
+
+  let contents = Buffer.alloc(0);
+  tree.forEach(({ mode, hash, name }) => {
+    contents = Buffer.concat([
+      contents,
+      Buffer.from(`${mode} ${name}\0`),
+      Buffer.from(hash, "hex"),
+    ]);
   });
-  // replace multiple new lines with single new line
-  const output = names.join("\n").replace(/\n+/g, "\n");
-  process.stdout.write(output.concat("\n"));
+
+  // store
+  const store = Buffer.concat([
+    Buffer.from(`tree ${contents.length}\0`),
+    contents,
+  ]);
+
+  // create a hash of the tree
+  const hash = crypto.createHash("sha1").update(store).digest("hex");
+
+  // compress
+  const compressed = zlib.deflateSync(store);
+
+  // store the compressed tree
+  const hashPath = path.join(__dirname, ".git", "objects", hash.slice(0, 2));
+  fs.mkdirSync(hashPath, { recursive: true });
+  fs.writeFileSync(path.join(hashPath, hash.slice(2)), compressed);
+
+  return hash;
+}
+
+// get the directory and filename in the path
+function parseTree(dirpath) {
+  return fs
+    .readdirSync(dirpath)
+    .filter((subpath) => subpath !== ".git")
+    .filter((subpath) => subpath !== "main.js")
+    .map((subpath) => {
+      const fullPath = path.join(dirpath, subpath);
+
+      if (fs.lstatSync(fullPath).isDirectory()) {
+        return {
+          mode: 40000,
+          name: subpath,
+          hash: writeTree(fullPath),
+        };
+      }
+
+      return {
+        mode: 100644,
+        name: subpath,
+        hash: hashFile(fullPath),
+      };
+    });
+}
+
+// parse the contents of a tree object
+function parseContents(contents, acc = []) {
+  if (contents.length === 0) {
+    return acc;
+  }
+
+  const spaceIndex = contents.indexOf(" ");
+  const nullIndex = contents.indexOf("\0");
+  const hashIndex = nullIndex + 1 + 20;
+  const mode = parseInt(contents.slice(0, spaceIndex).toString(), 8);
+  const name = contents.slice(spaceIndex + 1, nullIndex).toString();
+  const hash = contents.slice(nullIndex + 1, hashIndex).toString("hex");
+
+  return parseContents(contents.slice(hashIndex), [
+    ...acc,
+    { mode, name, hash },
+  ]);
 }
