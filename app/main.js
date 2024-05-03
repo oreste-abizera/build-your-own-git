@@ -25,12 +25,15 @@ switch (command) {
   case "write-tree":
     process.stdout.write(writeTree());
     break;
+  case "commit-tree":
+    commitTree(process.argv.slice(3));
+    break;
   default:
     throw new Error(`Unknown command ${command}`);
 }
 
 function createGitDirectory() {
-  // init
+  // ./your_git.sh init
   fs.mkdirSync(path.join(__dirname, ".git"), { recursive: true });
   fs.mkdirSync(path.join(__dirname, ".git", "objects"), { recursive: true });
   fs.mkdirSync(path.join(__dirname, ".git", "refs"), { recursive: true });
@@ -43,7 +46,7 @@ function createGitDirectory() {
 }
 
 function catFile() {
-  // cat-file -p <hash>
+  // ./your-git.sh cat-file -p <hash>
   const type = process.argv[3];
   const hash = process.argv[4];
   if (!type || !hash) {
@@ -62,7 +65,7 @@ function catFile() {
 }
 
 function hashObject() {
-  // hash-object -w <file>
+  // .your-git.sh hash-object -w <file>
   const flag = process.argv[3];
   const file = process.argv[4];
   if (!flag || !file) {
@@ -88,7 +91,7 @@ function hashFile(file) {
 }
 
 function lsTree() {
-  // ls-tree [--name-only] <hash>
+  // ./your-git.sh ls-tree [--name-only] <hash>
   const isNameOnly = process.argv[3] === "--name-only";
   const hash = process.argv[isNameOnly ? 4 : 3];
   if (!hash) {
@@ -112,7 +115,7 @@ function lsTree() {
 }
 
 function writeTree(dir = __dirname) {
-  // write-tree
+  // ./your-git.sh write-tree
   const tree = parseTree(dir);
 
   let contents = Buffer.alloc(0);
@@ -186,4 +189,51 @@ function parseContents(contents, acc = []) {
     ...acc,
     { mode, name, hash },
   ]);
+}
+
+function commitTree([message = "", _, parentCommitSha]) {
+  // ./your_git.sh commit-tree -m <message> -p <commit_sha>
+
+  const author = "Oreste Abizera <oresteabizera11@gmail.com>";
+  const date = new Date();
+  const timestamp = date.getTime();
+  const timezone = date.getTimezoneOffset();
+
+  const tree = writeTree(__dirname);
+
+  const contents = Buffer.concat([
+    Buffer.from(`tree ${tree}\n`, "utf-8"),
+    Buffer.from(`parent ${parentCommitSha}\n`, "utf-8"),
+    Buffer.from(`author ${author} ${timestamp} ${timezone}\n`, "utf-8"),
+    Buffer.from(`committer ${author} ${timestamp} ${timezone}\n`, "utf-8"),
+    Buffer.from("\n", "utf-8"),
+    Buffer.from(message, "utf-8"),
+    Buffer.from("\n", "utf-8"),
+  ]);
+
+  const commitData = Buffer.concat([
+    Buffer.from(`commit ${contents.length}\0`),
+    contents,
+  ]);
+
+  const hash = crypto.createHash("sha1").update(commitData).digest("hex");
+  const [dir, filename] = [hash.slice(0, 2), hash.slice(2)];
+
+  if (!fs.existsSync(path.join(__dirname, ".git", "objects", dir))) {
+    fs.mkdirSync(path.join(__dirname, ".git", "objects", dir), {
+      recursive: true,
+    });
+  }
+
+  const pathToFile = path.join(__dirname, ".git", "objects", dir, filename);
+  fs.writeFileSync(pathToFile, zlib.deflateSync(commitData));
+
+  const mainPath = path.join(__dirname, ".git", "refs", "heads");
+  if (!fs.existsSync(mainPath)) {
+    fs.mkdirSync(mainPath, { recursive: true });
+  }
+
+  fs.writeFileSync(path.join(mainPath, "main"), zlib.deflateSync(hash + "\n"));
+
+  process.stdout.write(hash + "\n");
 }
