@@ -9,7 +9,7 @@
     "keywords": [
         "build-your-own-x"
     ],
-    "author": "",
+    "author": "@oreste-abizera",
     "license": "MIT",
     "dependencies": {
         "zlib": "^1.0.5"

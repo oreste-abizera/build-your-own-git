@@ -19,6 +19,9 @@ switch (command) {
   case "hash-object":
     hashObject();
     break;
+  case "ls-tree":
+    lsTree();
+    break;
   default:
     throw new Error(`Unknown command ${command}`);
 }
@@ -54,13 +57,13 @@ function catFile() {
 }
 
 function hashObject() {
-  const command = process.argv[3];
+  const flag = process.argv[3];
   const file = process.argv[4];
-  if (!command || !file) {
+  if (!flag || !file) {
     throw new Error("Missing arguments");
   }
-  if (command !== "-w") {
-    throw new Error(`Unknown flag ${command}`);
+  if (flag !== "-w") {
+    throw new Error(`Unknown flag ${flag}`);
   }
 
   const hash = hashFile(file);
@@ -76,4 +79,26 @@ function hashFile(file) {
   fs.mkdirSync(hashPath, { recursive: true });
   fs.writeFileSync(path.join(hashPath, hash.slice(2)), store);
   return hash;
+}
+
+function lsTree() {
+  const isNameOnly = process.argv[3] === "--name-only";
+  const hash = process.argv[isNameOnly ? 4 : 3];
+  if (!hash) {
+    throw new Error("Missing arguments");
+  }
+  const dirName = hash.slice(0, 2);
+  const fileName = hash.slice(2);
+  const objectPath = path.join(__dirname, ".git", "objects", dirName, fileName);
+  const dataFromFile = fs.readFileSync(objectPath);
+  const decompressed = zlib.inflateSync(dataFromFile);
+  const contentStart = decompressed.indexOf("\x00") + 1;
+  const dataFromTree = decompressed.toString("utf-8", contentStart);
+  const names = dataFromTree.split("\n").map((line) => {
+    const [mode, type, hash, name] = line.split(" ");
+    return isNameOnly ? name : `${mode} ${type} ${hash} ${name}`;
+  });
+  // replace multiple new lines with single new line
+  const output = names.join("\n").replace(/\n+/g, "\n");
+  process.stdout.write(output.concat("\n"));
 }
